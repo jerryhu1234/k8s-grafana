@@ -1,0 +1,180 @@
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: prometheus-server-conf
+  namespace: kube-system
+  labels:
+    name: prometheus-server-conf
+data:
+  prometheus.yml: >-
+    global:
+      scrape_interval: 30s
+      evaluation_interval: 30s
+    alerting:
+      alertmanagers:
+        - static_configs:
+          - targets: ["alertmanager:9093"]
+    rule_files:
+    - /etc/prometheus/rules.yml
+    scrape_configs:
+    - job_name: 'kubernetes-kubelet'
+      scheme: https
+      tls_config:
+        ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        insecure_skip_verify: true
+      bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+      kubernetes_sd_configs:
+      - role: node
+      relabel_configs:
+      - action: labelmap
+        regex: __meta_kubernetes_node_label_(.+)
+      - target_label: __address__
+        replacement: kubernetes.default.svc:443
+      - source_labels: [__meta_kubernetes_node_name]
+        regex: (.+)
+        target_label: __metrics_path__
+        replacement: /api/v1/nodes/${1}/proxy/metrics
+    - job_name: 'kubernetes-cadvisor'
+      scheme: https
+      tls_config:
+        ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        insecure_skip_verify: true
+      bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+      kubernetes_sd_configs:
+      - role: node
+      relabel_configs:
+      - action: labelmap
+        regex: __meta_kubernetes_node_label_(.+)
+      - target_label: __address__
+        replacement: kubernetes.default.svc:443
+      - source_labels: [__meta_kubernetes_node_name]
+        regex: (.+)
+        target_label: __metrics_path__
+        replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
+    - job_name: 'kubernetes-kube-state'
+      kubernetes_sd_configs:
+      - role: pod
+      relabel_configs:
+      - action: labelmap
+        regex: __meta_kubernetes_pod_label_(.+)
+      - source_labels: [__meta_kubernetes_namespace]
+        action: replace
+        target_label: kubernetes_namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        action: replace
+        target_label: kubernetes_pod_name
+      - source_labels: [__meta_kubernetes_pod_label_grafanak8sapp]
+        regex: .*true.*
+        action: keep
+      - source_labels: ['__meta_kubernetes_pod_label_daemon', '__meta_kubernetes_pod_node_name']
+        regex: 'node-exporter;(.*)'
+        action: replace
+        target_label: nodename
+    - job_name: 'kubernetes-service-http-probe'
+      tls_config:
+        ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+      kubernetes_sd_configs:
+      - role: service
+      # 将metrics_path由默认的/metrics改为/probe
+      metrics_path: /probe
+      # Optional HTTP URL parameters.
+      # 生成__param_module="http_2xx"的label
+      params:
+        module: [http_2xx]
+      relabel_configs:
+      # 只保留含有label为prometheus/io=scrape的service
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape, __meta_kubernetes_service_annotation_prometheus_io_http_probe]
+        regex: true;true
+        action: keep
+      - source_labels: [__meta_kubernetes_service_name, __meta_kubernetes_namespace, __meta_kubernetes_service_annotation_prometheus_io_http_probe_port, __meta_kubernetes_service_annotation_prometheus_io_http_probe_path]
+        action: replace
+        target_label: __param_target
+        regex: (.+);(.+);(.+);(.+)
+        replacement: $1.$2:$3$4
+      # 用__address__这个label的值创建一个名为__param_target的label为blackbox-exporter,值为内部service的访问地址，作为blackbox-exporter采集用
+      #- source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_http_probe_path]
+      #  action: replace
+      #  target_label: __param_target
+      #  regex: (.+);(.+)
+      #  replacement: $1$2
+      # 用blackbox-exporter的service地址值”prometheus-blackbox-exporter:9115"替换原__address__的值
+      - target_label: __address__
+        replacement: prometheus-blackbox-exporter:9115
+      - source_labels: [__param_target]
+        target_label: instance
+      # 去掉label name中的前缀__meta_kubernetes_service_annotation_prometheus_io_app_info_
+      - action: labelmap
+        regex: __meta_kubernetes_service_annotation_prometheus_io_app_info_(.+)
+      #- source_labels: [__meta_kubernetes_namespace]
+      #  target_label: kubernetes_namespace
+      #- source_labels: [__meta_kubernetes_service_name]
+      #  target_label: kubernetes_name
+      ## kubernetes-services and kubernetes-ingresses are blackbox_exporter related
+      
+      # Example scrape config for probing services via the Blackbox Exporter.
+      # 
+      # The relabeling allows the actual service scrape endpoint to be configured
+      # for all or only some services.
+    - job_name: 'kubernetes-service-tcp-probe'
+      tls_config:
+        ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+      kubernetes_sd_configs:
+      - role: service
+      # 将metrics_path由默认的/metrics改为/probe
+      metrics_path: /probe
+      # Optional HTTP URL parameters.
+      # 生成__param_module="tcp_connect"的label
+      params:
+        module: [tcp_connect]
+      relabel_configs:
+      # 只保留含有label为prometheus/io=scrape的service
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape, __meta_kubernetes_service_annotation_prometheus_io_tcp_probe]
+        regex: true;true
+        action: keep
+      - source_labels: [__meta_kubernetes_service_name, __meta_kubernetes_namespace, __meta_kubernetes_service_annotation_prometheus_io_tcp_probe_port]
+        action: replace
+        target_label: __param_target
+        regex: (.+);(.+);(.+)
+        replacement: $1.$2:$3
+      # 用__address__这个label的值创建一个名为__param_target的label为blackbox-exporter,值为内部service的访问地址，作为blackbox-exporter采集用
+      #- source_labels: [__address__]
+      #  target_label: __param_target
+      # 用blackbox-exporter的service地址值”prometheus-blackbox-exporter:9115"替换原__address__的值
+      - target_label: __address__
+        replacement: prometheus-blackbox-exporter:9115
+      - source_labels: [__param_target]
+        target_label: instance
+      # 去掉label name中的前缀__meta_kubernetes_service_annotation_prometheus_io_app_info_
+      - action: labelmap
+        regex: __meta_kubernetes_service_annotation_prometheus_io_app_info_(.+)
+  rules.yml: |
+    groups:
+    - name: citest
+      rules:
+      - alert: ContainerNotReady
+        expr: kube_pod_container_status_ready{} == 0
+        for: 5m
+        labels:
+          team: container
+          severity: warning
+        annotations:
+          summary: "{{$labels.pod}}: kube_pod_container_status_not ready"
+          description: "{{$labels.pod}}: kube_pod_container_status_ready is {{ $value }}"
+      - alert: ContainerWating
+        expr: kube_pod_container_status_waiting{namespace!="kube-system"}  == 1
+        for: 3m
+        labels:
+          team: container
+          severity: warning
+        annotations:
+          summary: "{{$labels.pod}}: kube_pod_container_waiting"
+      - alert: ServiceHealthCheck
+        expr: probe_http_status_code == 0
+        for: 1m
+        labels:
+          team: container
+          severity: warning
+        annotations:
+          summary: "{{$labels.instance}}: no health!!"       

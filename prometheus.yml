@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-deployment
+  namespace: kube-system
+  #annotations:
+    # used to scrape app's metrics which deployed in pod
+  #  prometheus.io/scrape: 'true'
+    # prometheus scrape path, default /metrics
+  #  prometheus.io/path: '/metrics'
+    # prometheus.io/port relvant port
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus-server
+  template:
+    metadata:
+      labels:
+        app: prometheus-server
+    spec:
+      securityContext:
+        runAsUser: 0
+      containers:
+        - name: prometheus
+          image: prom/prometheus
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus/"
+            - "--storage.tsdb.retention=7d"
+          ports:
+            - containerPort: 9090
+              protocol: TCP
+          volumeMounts:
+            - name: gluster-volume
+              mountPath: /prometheus
+            - name: config-volume
+              mountPath: /etc/prometheus
+      serviceAccountName: prometheus
+      volumes:
+        - name: gluster-volume
+          emptyDir: {}
+          #persistentVolumeClaim:
+          #  claimName: gluster-prometheus
+        - name: config-volume
+          configMap:
+            name: prometheus-server-conf
+---
+ 
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: kube-system
+  labels:
+    k8s-app: prometheus
+spec:
+  selector:
+    app: prometheus-server
+  type: NodePort
+  ports:
+    - name: web
+      port: 9090
+      targetPort: 9090
+
